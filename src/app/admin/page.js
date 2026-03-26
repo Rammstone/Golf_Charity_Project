@@ -153,6 +153,7 @@ export default function AdminPanel() {
   const [spinning, setSpinning] = useState(false)
   const [drawNumbers, setDrawNumbers] = useState([])
   const [drawMode, setDrawMode] = useState("random")
+  const [prizePool, setPrizePool] = useState("")
 
   const wheelSegments = [
   "01–05",
@@ -166,10 +167,13 @@ export default function AdminPanel() {
   "41–45",
   ]
 
+
+
   // =========================================================
   // WINNERS DATA
   // =========================================================
   const [winners, setWinners] = useState([])
+  const [drawScores, setDrawScores] = useState([])
 
   // =========================================================
   // PAYOUT MODAL STATE
@@ -204,6 +208,11 @@ export default function AdminPanel() {
 
   checkAdmin()
 }, [router])
+
+async function logout() {
+  await supabase.auth.signOut()
+  router.replace("/login")
+}
 
 // Loading User Data
 useEffect(() => {
@@ -280,14 +289,16 @@ useEffect(() => {
         amount,
         tier,
         status,
+        user_id,
         users ( name )
       `)
       .order("created_at", { ascending: false })
 
     const formatted = data.map((w) => ({
       id: w.id,
+      user_id: w.user_id,   // ⭐ ADD THIS
       name: w.users?.name || "Unknown",
-      amount: `$${w.amount}`,
+      amount: w.amount,     // ⭐ store numeric value
       tier: w.tier,
       status: w.status,
     }))
@@ -501,12 +512,13 @@ useEffect(() => {
     if (drawNumbers.length === 0) return
 
     await supabase.from("draws").insert({
-        numbers: drawNumbers,
-        month: new Date().toLocaleString("default", {
+      numbers: drawNumbers,
+      prize_pool: Number(prizePool) || 0,
+      month: new Date().toLocaleString("default", {
         month: "long",
         year: "numeric",
-        }),
-        published: true,
+      }),
+      published: true,
     })
 
     alert("Draw saved successfully!")
@@ -514,54 +526,88 @@ useEffect(() => {
 
     async function openVerifyPay(winner) {
 
-        setSelectedWinner(winner)
+      setSelectedWinner(winner)
 
-        // ⭐ Get auth user id of winner
-        const { data: userRow } = await supabase
-            .from("users")
-            .select("id")
-            .eq("name", winner.name)
-            .single()
+      // ⭐ Get user ID
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("id")
+        .eq("name", winner.name)
+        .single()
 
-        if (!userRow) return
+      if (!userRow) return
 
-        // ⭐ Get latest draw entry snapshot
-        const { data: entry } = await supabase
-            .from("draw_entries")
-            .select("scores")
-            .eq("user_id", userRow.id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single()
+      // ⭐ Get latest draw entry (user scores)
+      const { data: entry } = await supabase
+        .from("draw_entries")
+        .select("scores")
+        .eq("user_id", userRow.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single()
 
-        if (entry) {
-            setEntryScores(entry.scores)
-        }
+      if (entry) {
+        setEntryScores(entry.scores)
+      }
 
-        setShowPayModal(true)
+      // ⭐ Get latest published draw (draw numbers)
+      const { data: drawData } = await supabase
+        .from("draws")
+        .select("numbers")
+        .eq("published", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single()
+
+      if (drawData) {
+        setDrawScores(drawData.numbers)
+      }
+
+      setShowPayModal(true)
     }
 
     async function proceedToPay() {
 
-        if (!selectedWinner) return
+      if (!selectedWinner) return
 
-        await supabase
-            .from("winners")
-            .update({ status: "Paid" })
-            .eq("id", selectedWinner.id)
+      const amount = selectedWinner.amount
+      const userId = selectedWinner.user_id
 
-        // Update UI
-        setWinners((prev) =>
-            prev.map((w) =>
-            w.id === selectedWinner.id
-                ? { ...w, status: "Paid" }
-                : w
-            )
+      // 1️⃣ Mark winner as paid
+      await supabase
+        .from("winners")
+        .update({ status: "Paid" })
+        .eq("id", selectedWinner.id)
+
+      // 2️⃣ Get current winnings
+      const { data: user } = await supabase
+        .from("users")
+        .select("total_winnings")
+        .eq("id", userId)
+        .single()
+
+      const current = user?.total_winnings || 0
+
+      // 3️⃣ Add prize amount
+      await supabase
+        .from("users")
+        .update({
+          total_winnings: current + amount,
+        })
+        .eq("id", userId)
+
+      // 4️⃣ Update UI
+      setWinners((prev) =>
+        prev.map((w) =>
+          w.id === selectedWinner.id
+            ? { ...w, status: "Paid" }
+            : w
         )
+      )
 
-        setShowPayModal(false)
+      setShowPayModal(false)
 
-        alert("Payment completed successfully")
+      alert("Payment completed successfully")
     }
 
   // =========================================================
@@ -572,16 +618,32 @@ useEffect(() => {
     <main className="min-h-screen bg-[#F6F8F7] flex text-gray-900">
 
       {/* ================= SIDEBAR ================= */}
-      <aside className="w-64 bg-white border-r p-6 space-y-3">
-        <h2 className="text-xl font-bold mb-6 text-black">
-          Admin Panel
-        </h2>
+      <aside className="w-64 bg-white border-r p-6 flex flex-col">
 
-        <NavItem id="users" label="Users" {...{ activeTab, setActiveTab }} />
-        <NavItem id="charity" label="Charities" {...{ activeTab, setActiveTab }} />
-        <NavItem id="draws" label="Draw Management" {...{ activeTab, setActiveTab }} />
-        <NavItem id="winners" label="Winners" {...{ activeTab, setActiveTab }} />
-        <NavItem id="reports" label="Reports" {...{ activeTab, setActiveTab }} />
+        <div className="space-y-3 flex-1">
+          <h2 className="text-xl font-bold mb-6 text-black">
+            Admin Panel
+          </h2>
+
+          <NavItem id="users" label="Users" {...{ activeTab, setActiveTab }} />
+          <NavItem id="charity" label="Charities" {...{ activeTab, setActiveTab }} />
+          <NavItem id="draws" label="Draw Management" {...{ activeTab, setActiveTab }} />
+          <NavItem id="winners" label="Winners" {...{ activeTab, setActiveTab }} />
+          <NavItem id="reports" label="Reports" {...{ activeTab, setActiveTab }} />
+        </div>
+
+        {/* ⭐ Logout at bottom */}
+        <button
+          onClick={logout}
+          className="
+            mt-6 bg-red-500 text-white
+            py-2 rounded-lg font-semibold
+            hover:bg-red-600 transition
+          "
+        >
+          Logout
+        </button>
+
       </aside>
 
       {/* ================= CONTENT ================= */}
@@ -944,6 +1006,34 @@ useEffect(() => {
 
             </div>
 
+            {/* ===== PRIZE POOL INPUT ===== */}
+            <div className="flex justify-center mb-6">
+
+              <div className="flex items-center gap-3 bg-gray-50 px-6 py-4 rounded-xl shadow-sm">
+
+                <label className="font-semibold text-gray-700">
+                  Prize Pool
+                </label>
+
+                <input
+                  type="number"
+                  placeholder="Amount"
+                  value={prizePool}
+                  onChange={(e) => setPrizePool(e.target.value)}
+                  className="
+                    border rounded-lg px-4 py-2
+                    w-40 text-center
+                  "
+                />
+
+                <span className="text-gray-500 font-medium">
+                  USD
+                </span>
+
+              </div>
+
+            </div>
+
             {/* ===== BUTTONS ===== */}
             <div className="flex justify-center gap-4 flex-wrap">
 
@@ -1241,26 +1331,46 @@ useEffect(() => {
                 <strong>Prize:</strong> {selectedWinner.amount}
                 </p>
 
-                <p className="font-medium mb-2">
-                Submitted Scores
+                {/* ===== DRAW NUMBERS ===== */}
+                <p className="font-medium mb-2 text-gray-700">
+                  Draw Numbers
+                </p>
+
+                <div className="flex gap-2 justify-center mb-4">
+                  {drawScores.map((n, i) => (
+                    <div
+                      key={i}
+                      className="
+                        w-12 h-12 rounded-full
+                        bg-blue-100 text-blue-700
+                        flex items-center justify-center
+                        font-semibold
+                      "
+                    >
+                      {n}
+                    </div>
+                  ))}
+                </div>
+
+                {/* ===== USER SCORES ===== */}
+                <p className="font-medium mb-2 text-gray-700">
+                  User Submitted Scores
                 </p>
 
                 <div className="flex gap-2 justify-center mb-6">
-
-                {entryScores.map((n, i) => (
+                  {entryScores.map((n, i) => (
                     <div
-                    key={i}
-                    className="
+                      key={i}
+                      className="
                         w-12 h-12 rounded-full
                         bg-emerald-100 text-emerald-700
                         flex items-center justify-center
                         font-semibold
-                    "
+                      "
                     >
-                    {n}
+                      {n}
                     </div>
-                ))}
-
+                  ))}
                 </div>
 
                 <button
@@ -1331,9 +1441,25 @@ function WinnerRow({ name, amount, tier, status, onVerify }) {
       {/* RIGHT — AMOUNT + STATUS */}
       <div className="text-right space-y-2">
 
-        <p className="text-2xl font-bold text-emerald-700">
-          {amount}
-        </p>
+        <div>
+          <p className="text-sm text-gray-500">Amount Won</p>
+
+          <p className="text-2xl font-bold text-emerald-700">
+            ${amount || 0}
+          </p>
+
+          {status === "requested" && (
+            <p className="text-xs text-blue-600 font-medium">
+              Requested for payout
+            </p>
+          )}
+
+          {status === "Paid" && (
+            <p className="text-xs text-green-600 font-medium">
+              Paid to user
+            </p>
+          )}
+        </div>
 
         <span
           className={`

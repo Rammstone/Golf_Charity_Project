@@ -238,27 +238,106 @@ export default function Dashboard() {
     setEnteredScores(scoreValues)
     }
 
+    async function resetEntry() {
+
+      if (!draw || !user) return
+
+      await supabase
+        .from("draw_entries")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("draw_id", draw.id)
+
+      setEntered(false)
+      setEnteredScores(null)
+      setWinner(null)
+
+      alert("Entry reset — you can re-enter the draw")
+    }
+
+    async function forceWinningEntry() {
+
+      if (!draw || !user) return
+
+      await supabase
+        .from("draw_entries")
+        .upsert({
+          user_id: user.id,
+          draw_id: draw.id,
+          scores: draw.numbers,  // exact match
+        })
+
+      setEntered(true)
+      setEnteredScores(draw.numbers)
+
+      alert("Winning entry generated")
+    }
+
     async function claimPrize() {
 
-        if (!winner) return
+      if (!winner || !draw || !enteredScores) return
 
-        const { error } = await supabase
-            .from("winners")
-            .update({ status: "requested" })
-            .eq("id", winner.id)
+      const prizePool = draw.prize_pool || 0
 
-        if (!error) {
+      if (prizePool <= 0) {
+        alert("Prize pool not set for this draw")
+        return
+      }
 
-            setWinner({
-            ...winner,
-            status: "requested"
-            })
+      // ⭐ Recalculate matches from locked entry
+      const matches = enteredScores.filter((n) =>
+        draw.numbers.includes(n)
+      ).length
 
-            alert(
-            "Your request has been successfully sent. " +
-            "Your prize will be rewarded after verification."
-            )
-        }
+      const tierShare = {
+        5: 40,
+        4: 35,
+        3: 25
+      }
+
+      const share = tierShare[matches]
+
+      if (!share) {
+        alert("Invalid tier value")
+        return
+      }
+
+      // ⭐ TOTAL POOL FOR THIS TIER
+      const tierPool = (share / 100) * prizePool
+
+      // ⭐ COUNT WINNERS IN SAME TIER
+      const { count } = await supabase
+        .from("winners")
+        .select("*", { count: "exact", head: true })
+        .eq("draw_id", draw.id)
+        .eq("tier", winner.tier)
+
+      const winnerCount = count || 1
+
+      // ⭐ FINAL PER-WINNER AMOUNT
+      const amount = tierPool / winnerCount
+
+      // ⭐ UPDATE REQUEST
+      const { error } = await supabase
+        .from("winners")
+        .update({
+          status: "requested",
+          amount: amount
+        })
+        .eq("id", winner.id)
+
+      if (!error) {
+        setWinner({
+          ...winner,
+          status: "requested",
+          amount
+        })
+
+        alert(
+          `Request sent for $${amount.toFixed(2)}. ` +
+          "Payment will be processed after verification."
+        )
+      }
     }
 
   const nextDrawDate = new Date("2026-07-30")
@@ -410,6 +489,15 @@ export default function Dashboard() {
                     ))}
                 </div>
 
+                {draw?.prize_pool && (
+                  <div className="text-center mb-4">
+                    <p className="text-sm text-gray-500">Prize Pool</p>
+                    <p className="text-3xl font-bold text-emerald-700">
+                      ${draw.prize_pool}
+                    </p>
+                  </div>
+                )}
+
                 {enteredScores ? (
                     (() => {
 
@@ -420,11 +508,16 @@ export default function Dashboard() {
                         draw?.numbers?.includes(n)
                     ).length
 
+                    const prizePool = draw?.prize_pool || 0
+
                     const tiers = [
-                        { match: 5, share: 40, rollover: true },
-                        { match: 4, share: 35, rollover: false },
-                        { match: 3, share: 25, rollover: false },
-                    ]
+                      { match: 5, share: 40, rollover: true },
+                      { match: 4, share: 35, rollover: false },
+                      { match: 3, share: 25, rollover: false },
+                    ].map(t => ({
+                      ...t,
+                      amount: Math.round((t.share / 100) * prizePool)
+                    }))
 
                     return (
                         <div className="space-y-6">
@@ -483,7 +576,7 @@ export default function Dashboard() {
                                     </p>
 
                                     <p className="text-sm text-gray-500">
-                                    Pool Share: {t.share}%
+                                      Pool Share: {t.share}% (${t.amount})
                                     </p>
                                 </div>
 
@@ -562,28 +655,86 @@ export default function Dashboard() {
               {daysRemaining} days remaining
             </p>
             {!entered ? (
-                <button
-                    onClick={enterDraw}
-                    disabled={scores.length < 5}
-                    className="
-                    mt-4 bg-blue-600 text-white
-                    px-5 py-2 rounded-lg font-semibold
-                    disabled:opacity-50
-                    "
-                >
-                    Enter Draw
-                </button>
-                ) : (
-                <p className="mt-4 text-emerald-600 font-semibold">
-                    ✓ You have entered this draw
+
+              <button
+                onClick={enterDraw}
+                disabled={scores.length < 5}
+                className="
+                  mt-4 bg-blue-600 text-white
+                  px-5 py-2 rounded-lg font-semibold
+                  disabled:opacity-50
+                "
+              >
+                Enter Draw
+              </button>
+
+            ) : (
+
+              <div className="mt-6 space-y-4">
+
+                {/* ⭐ DEMO MODE NOTICE */}
+                <div className="
+                  bg-yellow-50 border border-yellow-200
+                  text-yellow-800
+                  text-sm rounded-lg
+                  px-4 py-2
+                  text-center
+                ">
+                  ⚠️ Demo Mode — Entries can be reset for testing
+                </div>
+
+                {/* STATUS */}
+                <p className="text-emerald-600 font-semibold text-center">
+                  ✓ You have entered this draw
                 </p>
-                )}
+
+                {/* ACTION BUTTONS */}
+                <div className="
+                  flex flex-col sm:flex-row
+                  justify-center items-center
+                  gap-3
+                  bg-gray-50 border border-gray-200
+                  rounded-xl p-4
+                ">
+
+                  <button
+                    onClick={resetEntry}
+                    className="
+                      w-full sm:w-auto
+                      bg-red-500 text-white
+                      px-5 py-2.5 rounded-lg
+                      text-sm font-semibold
+                      shadow-sm hover:bg-red-600 transition
+                    "
+                  >
+                    Reset Entry
+                  </button>
+
+                  <button
+                    onClick={forceWinningEntry}
+                    className="
+                      w-full sm:w-auto
+                      bg-purple-600 text-white
+                      px-5 py-2.5 rounded-lg
+                      text-sm font-semibold
+                      shadow-sm hover:bg-purple-700 transition
+                    "
+                  >
+                    Generate Winning Entry
+                  </button>
+
+                </div>
+
+              </div>
+
+            )}
           </Card>
 
-          <Card title="Upcoming Draw Entries" mounted={mounted}>
+          <Card title="Entries Upcoming Draw" mounted={mounted}>
 
             {enteredScores ? (
-                <div className="flex gap-3 justify-center">
+                <div className="flex gap-3 justify-center items-center min-h-[140px]
+">
 
                 {enteredScores.map((n, i) => (
                     <div
