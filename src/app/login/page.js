@@ -98,6 +98,31 @@ export default function LoginPage() {
 
         </form>
 
+        {/* ===== DEMO CREDENTIALS ===== */}
+        <div className="
+          mt-6 p-4 rounded-xl
+          bg-yellow-50 border border-yellow-200
+          text-sm text-yellow-900
+        ">
+
+          <p className="font-semibold mb-2">
+            Demo Login Credentials
+          </p>
+
+          <div className="space-y-1">
+            <p>
+              <span className="font-medium">Guest User:</span>{" "}
+              bob@gmail.com / Bobby125
+            </p>
+
+            <p>
+              <span className="font-medium">Admin:</span>{" "}
+              admin@gmail.com / admin125
+            </p>
+          </div>
+
+        </div>
+
         <p className="text-center text-sm text-gray-500 mt-6">
           Don’t have an account?{" "}
           <a href="/signup" className="text-emerald-600 font-medium">
